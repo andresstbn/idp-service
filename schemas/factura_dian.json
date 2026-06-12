@@ -1,0 +1,128 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "factura_dian",
+  "description": "Factura Electrónica de Venta DIAN Colombia y Documento Equivalente POS.",
+  "type": "object",
+  "x-extractor": "dian_factura",
+  "required": [],
+  "properties": {
+    "supplier_code": {
+      "type": ["string", "null"],
+      "description": "Número de factura o documento. Ej: FET-4888, PETR32261."
+    },
+    "uuid": {
+      "type": ["string", "null"],
+      "description": "Código único CUFE o CUDE. Cadena hexadecimal de 96 caracteres."
+    },
+    "date": {
+      "type": ["string", "null"],
+      "format": "date",
+      "description": "Fecha de emisión normalizada a ISO 8601 (YYYY-MM-DD)."
+    },
+    "payment_date": {
+      "type": ["string", "null"],
+      "format": "date",
+      "description": "Fecha de vencimiento normalizada a ISO 8601 (YYYY-MM-DD)."
+    },
+    "payment_type_label": {
+      "type": ["string", "null"],
+      "description": "Forma de pago tal como aparece en el PDF. Ej: 'Crédito', 'Contado'."
+    },
+    "payment_method_label": {
+      "type": ["string", "null"],
+      "description": "Medio de pago tal como aparece en el PDF. Ej: 'Acuerdo mutuo', 'Efectivo'."
+    },
+    "imported_bu": {
+      "type": ["string", "null"],
+      "description": "NIT del adquiriente / comprador (la unidad de negocio que recibe la factura)."
+    },
+    "third_party": {
+      "type": "object",
+      "description": "Datos del emisor / vendedor.",
+      "properties": {
+        "id_number": {
+          "type": ["string", "null"],
+          "description": "NIT o número de documento del emisor."
+        },
+        "first_name": {
+          "type": ["string", "null"],
+          "description": "Razón social o nombre del emisor."
+        },
+        "address": {
+          "type": ["string", "null"],
+          "description": "Dirección del emisor."
+        },
+        "email": {
+          "type": ["string", "null"],
+          "description": "Correo electrónico del emisor."
+        },
+        "phone": {
+          "type": ["string", "null"],
+          "description": "Teléfono del emisor. Solo dígitos."
+        },
+        "country_name": {
+          "type": ["string", "null"],
+          "description": "País del emisor tal como aparece en el PDF. Ej: 'Colombia'."
+        },
+        "department_name": {
+          "type": ["string", "null"],
+          "description": "Departamento del emisor tal como aparece en el PDF."
+        },
+        "city_name": {
+          "type": ["string", "null"],
+          "description": "Ciudad del emisor tal como aparece en el PDF."
+        },
+        "activity_code": {
+          "type": ["string", "null"],
+          "description": "Código de actividad económica CIIU. Nulo si el campo está vacío."
+        },
+        "person_type": {
+          "type": ["string", "null"],
+          "enum": ["JUR", "NAT", null],
+          "description": "Tipo de contribuyente. JUR para Persona Jurídica, NAT para Persona Natural."
+        },
+        "tax_regime": {
+          "type": ["string", "null"],
+          "description": "Régimen fiscal del emisor. Ej: 'R-99-PN'."
+        },
+        "tax_liability_label": {
+          "type": ["string", "null"],
+          "description": "Responsabilidad tributaria tal como aparece. Ej: '01 - IVA'."
+        }
+      }
+    },
+    "items": {
+      "type": "array",
+      "description": "Líneas de detalle de productos o servicios de la factura.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "description": {
+            "type": "string",
+            "description": "Descripción del producto o servicio."
+          },
+          "price": {
+            "type": "string",
+            "description": "Precio unitario (sin IVA) como string decimal. Ej: '1500.00'."
+          },
+          "quantity": {
+            "type": "string",
+            "description": "Cantidad como string decimal. Ej: '1.00'."
+          },
+          "unit_code": {
+            "type": "string",
+            "description": "Código de unidad de medida DIAN. Ej: '94' (unidad), 'KGM'."
+          },
+          "iva_percentage": {
+            "type": "string",
+            "description": "Porcentaje de IVA. Ej: '19.00'. Cadena vacía si no aplica."
+          },
+          "inc_percentage": {
+            "type": "string",
+            "description": "Porcentaje de INC. Ej: '8.00'. Cadena vacía si no aplica."
+          }
+        }
+      }
+    }
+  }
+}
