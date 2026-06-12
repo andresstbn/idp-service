@@ -1,0 +1,20 @@
+# Framework HTTP async
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20
+
+# Configuración y validación
+pydantic==2.10.4
+pydantic-settings==2.7.1
+
+# Extracción de PDF
+pymupdf==1.25.1
+pdfplumber==0.11.5
+
+# Structured outputs LLM (multi-provider)
+instructor==1.7.2
+anthropic==0.42.0
+openai==1.59.6
+
+# Validación de JSON Schema
+jsonschema==4.23.0

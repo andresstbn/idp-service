@@ -1,0 +1,88 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "rut",
+  "description": "Registro Único Tributario (RUT) emitido por la DIAN Colombia.",
+  "type": "object",
+  "additionalProperties": false,
+  "x-extractor": "dian_rut",
+  "required": [],
+  "properties": {
+    "nit": {
+      "type": ["string", "null"],
+      "x-strip": "non-digits",
+      "description": "NIT sin dígito de verificación. Solo dígitos, sin guiones ni espacios. Campo 5 del formulario DIAN."
+    },
+    "dv": {
+      "type": ["string", "null"],
+      "x-strip": "non-digits",
+      "description": "Dígito de verificación del NIT. Campo 6. Un solo dígito."
+    },
+    "direccion_seccional": {
+      "type": ["string", "null"],
+      "description": "Dirección seccional DIAN. Campo 12. Ej: 'Impuestos de Medellín', 'Impuestos de Bogotá'."
+    },
+    "person_type": {
+      "type": ["string", "null"],
+      "enum": ["JUR", "NAT", null],
+      "description": "Tipo de contribuyente. JUR para Persona jurídica, NAT para Persona natural. Campo 24."
+    },
+    "id_type_label": {
+      "type": ["string", "null"],
+      "description": "Tipo de documento tal como aparece en el RUT. Campo 25. Ej: 'NIT', 'Cédula de Ciudadanía'."
+    },
+    "razon_social": {
+      "type": ["string", "null"],
+      "description": "Razón social de la empresa. Campo 35. Solo para personas jurídicas."
+    },
+    "nombre_comercial": {
+      "type": ["string", "null"],
+      "description": "Nombre comercial. Campo 36. Opcional; null si el campo está vacío en el formulario."
+    },
+    "primer_apellido": {
+      "type": ["string", "null"],
+      "description": "Primer apellido. Campo 31. Solo para personas naturales."
+    },
+    "segundo_apellido": {
+      "type": ["string", "null"],
+      "description": "Segundo apellido. Campo 32. Solo para personas naturales."
+    },
+    "primer_nombre": {
+      "type": ["string", "null"],
+      "description": "Primer nombre. Campo 33. Solo para personas naturales."
+    },
+    "otros_nombres": {
+      "type": ["string", "null"],
+      "description": "Otros nombres (segundo nombre). Campo 34. Solo para personas naturales."
+    },
+    "pais_nombre": {
+      "type": ["string", "null"],
+      "description": "País de ubicación tal como aparece en el formulario. Campo 38. Ej: 'COLOMBIA'."
+    },
+    "departamento_nombre": {
+      "type": ["string", "null"],
+      "description": "Departamento. Campos 29/39. Ej: 'Antioquia', 'Norte de Santander', 'Bogotá D.C.'."
+    },
+    "ciudad_nombre": {
+      "type": ["string", "null"],
+      "description": "Ciudad o municipio. Campos 30/40. Ej: 'Marinilla', 'Cúcuta', 'Bogotá, D.C.'."
+    },
+    "direccion": {
+      "type": ["string", "null"],
+      "description": "Dirección principal. Campo 41."
+    },
+    "correo": {
+      "type": ["string", "null"],
+      "description": "Correo electrónico. Campo 42."
+    },
+    "telefono": {
+      "type": ["string", "null"],
+      "x-strip": "non-digits",
+      "description": "Teléfono principal (campo 44). Solo dígitos."
+    },
+    "codigo_ciiu": {
+      "type": ["string", "null"],
+      "x-strip": "non-digits",
+      "description": "Código CIIU de la actividad económica principal. Campo 46. 4 dígitos."
+    }
+  }
+}

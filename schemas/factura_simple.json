@@ -1,0 +1,63 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "factura_simple",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["invoice_number", "issue_date", "amount_total"],
+  "properties": {
+    "invoice_number": {
+      "type": ["string", "null"],
+      "description": "Número o folio de la factura."
+    },
+    "supplier_name": {
+      "type": ["string", "null"],
+      "description": "Razón social del emisor de la factura."
+    },
+    "supplier_tax_id": {
+      "type": ["string", "null"],
+      "description": "NIT o identificación tributaria del emisor."
+    },
+    "issue_date": {
+      "type": ["string", "null"],
+      "format": "date",
+      "description": "Fecha de emisión en ISO 8601 (YYYY-MM-DD)."
+    },
+    "amount_subtotal": {
+      "type": ["number", "null"],
+      "x-locale": "es-CO",
+      "x-format": "currency",
+      "description": "Subtotal antes de impuestos."
+    },
+    "amount_total": {
+      "type": ["number", "null"],
+      "x-locale": "es-CO",
+      "x-format": "currency",
+      "description": "Total a pagar de la factura."
+    },
+    "currency": {
+      "type": ["string", "null"],
+      "description": "Código de moneda ISO 4217, p. ej. COP, USD."
+    },
+    "line_items": {
+      "type": "array",
+      "description": "Detalle de los conceptos facturados.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "description": {
+            "type": ["string", "null"]
+          },
+          "quantity": {
+            "type": ["number", "null"]
+          },
+          "unit_price": {
+            "type": ["number", "null"],
+            "x-locale": "es-CO",
+            "x-format": "currency"
+          }
+        }
+      }
+    }
+  }
+}
