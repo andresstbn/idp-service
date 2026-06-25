@@ -26,7 +26,7 @@ from core.logging import (
     reset_request_context,
 )
 from services.document_processor import DocumentProcessor
-from services.llm.factory import create_llm_provider
+from services.llm.factory import create_llm_provider, create_vision_provider
 from services.schema_registry import SchemaRegistry
 
 logger = get_logger("idp.main")
@@ -42,9 +42,11 @@ async def lifespan(app: FastAPI):
 
     # Falla en startup si el provider está mal configurado (no en runtime).
     llm = create_llm_provider()
+    # Provider de visión opcional (fallback). None si VISION_PROVIDER está vacío.
+    vision = create_vision_provider()
 
     app.state.registry = registry
-    app.state.processor = DocumentProcessor(registry, llm)
+    app.state.processor = DocumentProcessor(registry, llm, vision)
     app.state.started_at = time.time()
 
     log(
@@ -53,6 +55,7 @@ async def lifespan(app: FastAPI):
         "servicio IDP iniciado",
         llm_provider=settings.LLM_PROVIDER,
         llm_model=settings.LLM_MODEL,
+        vision_provider=settings.VISION_PROVIDER or None,
         schemas_loaded=registry.loaded_count,
     )
     yield

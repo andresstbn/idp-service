@@ -17,12 +17,19 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # --- LLM ---
+    # --- LLM (texto) ---
     LLM_PROVIDER: str = "anthropic"  # anthropic | openai
     LLM_MODEL: str = "claude-sonnet-4-20250514"
     ANTHROPIC_API_KEY: str = ""
     OPENAI_API_KEY: str = ""
     LLM_MAX_RETRIES: int = 2
+
+    # --- Visión (fallback cuando el texto no es extraíble; Fase 2) ---
+    VISION_PROVIDER: str = ""  # "" deshabilita el fallback | deepseek | mock
+    VISION_MODEL: str = "deepseek-chat"
+    DEEPSEEK_API_KEY: str = ""
+    VISION_MAX_PAGES: int = 2  # ponytail: RUT/factura caben en pág 1-2; sube si hace falta
+    VISION_RENDER_DPI: int = 200
 
     # --- Extracción ---
     SCHEMAS_DIR: str = "schemas"

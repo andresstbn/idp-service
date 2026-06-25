@@ -51,7 +51,8 @@ _Y_TOL = 6.0
 
 _Y_NIT_VALUE = 179.9          # Dígitos del NIT + DV + nombre seccional
 _Y_PERSON_TYPE_VALUE = 215.0  # "Persona jurídica" / "Persona natural"
-_Y_RAZON_SOCIAL_VALUE = 285.9 # Razón social (campo 35) o apellidos (persona natural)
+_Y_NAMES_VALUE = 261.9        # Apellidos y nombres (persona natural), campos 31-34
+_Y_RAZON_SOCIAL_VALUE = 285.9 # Razón social (campo 35), solo persona jurídica
 _Y_NOMBRE_COM_VALUE = 309.9   # Nombre comercial + sigla (puede estar vacío)
 _Y_LOCATION_VALUE = 347.0     # País, departamento, ciudad en una sola línea
 _Y_ADDRESS_VALUE = 370.9      # Dirección principal
@@ -62,6 +63,17 @@ _Y_CIIU_VALUE = 453.9         # Dígitos CIIU + fechas (primer grupo = código 4
 # X de las etiquetas en la línea de ubicación (y≈337.1), consistentes en todos los RUT.
 _X_DEPTO_LABEL = 200.0    # "39. Departamento"
 _X_CIUDAD_LABEL = 392.0   # "40. Ciudad/Municipio"
+
+# X de las etiquetas 32/33/34 en la fila de nombres (persona natural, y≈261.9).
+# El valor de cada campo cae unos puntos a la izquierda de su etiqueta, por eso las
+# fronteras se ponen ~6pt antes del X de la etiqueta siguiente.
+_X_NAME_SEGUNDO_AP = 150.0   # frontera campo 31 (primer apellido) | 32 (segundo apellido)
+_X_NAME_PRIMER_NOM = 276.0   # frontera campo 32 | 33 (primer nombre)
+_X_NAME_OTROS_NOM = 402.0    # frontera campo 33 | 34 (otros nombres)
+
+# X a partir del cual aparece el tipo de documento (campo 25) en la fila y≈215.
+# Antes de este X está la etiqueta "Persona natural o sucesión ilíquida" (campo 24).
+_X_ID_TYPE_START = 180.0
 
 # X de las etiquetas en la línea de teléfono (y≈397.1).
 _X_TEL1_LABEL = 201.5     # "44. Teléfono 1"
@@ -225,13 +237,14 @@ def _extract_person_type(lines: list[Line]) -> tuple[str | None, str | None]:
     if person_type == "JUR":
         id_type_label = "NIT"
     else:
-        non_type_tokens = [
+        # El tipo de documento (campo 25, ej. "Cédula de Ciudadanía") empieza a partir
+        # de _X_ID_TYPE_START; antes está la etiqueta del campo 24 ("Persona natural o
+        # sucesión ilíquida"). Se descartan los códigos numéricos.
+        id_tokens = [
             w[4] for w in line
-            if not re.fullmatch(r"[\d]+", w[4])
-            and w[4].lower() not in ("persona", "jurídica", "juridica", "natural")
+            if w[0] >= _X_ID_TYPE_START and not re.fullmatch(r"[\d]+", w[4])
         ]
-        if non_type_tokens:
-            id_type_label = " ".join(non_type_tokens).strip() or None
+        id_type_label = " ".join(id_tokens).strip() or None
 
     return person_type, id_type_label
 
@@ -367,19 +380,26 @@ def _extract_natural_person_names(
     lines: list[Line],
 ) -> tuple[str | None, str | None, str | None, str | None]:
     """Extrae (primer_apellido, segundo_apellido, primer_nombre, otros_nombres)
-    para personas naturales desde la línea y≈285.9.
+    para personas naturales desde la fila y≈261.9 (campos 31-34).
 
-    En personas naturales, la línea y≈285.9 contiene los apellidos y nombres
-    en el mismo orden que los campos 31-34. Esta función es tentativa ya que
-    no hay PDFs de personas naturales en la muestra validada.
+    Los cuatro campos comparten una sola línea, separados en columnas X por las
+    etiquetas 32/33/34 del formulario. Cada campo puede tener varias palabras
+    (ej. apellidos compuestos), que se unen con espacio.
+    Validado contra el RUT de ORLANDO BOTELLO AREVALO (persona natural).
     """
-    line = _find_line(lines, _Y_RAZON_SOCIAL_VALUE)
+    line = _find_line(lines, _Y_NAMES_VALUE)
     if not line:
         return None, None, None, None
-    # Sin muestra de persona natural, retornamos el texto completo como primer_apellido
-    # y dejamos el resto como None. En producción esto se refinará con datos reales.
-    text = _line_text(line).strip()
-    return text or None, None, None, None
+
+    def _col(x_min: float, x_max: float) -> str | None:
+        return " ".join(w[4] for w in line if x_min <= w[0] < x_max).strip() or None
+
+    return (
+        _col(0.0, _X_NAME_SEGUNDO_AP),
+        _col(_X_NAME_SEGUNDO_AP, _X_NAME_PRIMER_NOM),
+        _col(_X_NAME_PRIMER_NOM, _X_NAME_OTROS_NOM),
+        _col(_X_NAME_OTROS_NOM, float("inf")),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -435,9 +455,11 @@ def extract(content: bytes) -> dict[str, Any]:
         "otros_nombres": None,
     }
 
+    # Nombre comercial (campo 36) aplica a ambos tipos de persona.
+    result["nombre_comercial"] = _extract_nombre_comercial(lines)
+
     if person_type == "JUR" or person_type is None:
         result["razon_social"] = _extract_razon_social(lines)
-        result["nombre_comercial"] = _extract_nombre_comercial(lines)
     else:
         primer_ap, segundo_ap, primer_nom, otros_nom = _extract_natural_person_names(lines)
         result["primer_apellido"] = primer_ap

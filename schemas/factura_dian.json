@@ -4,6 +4,7 @@
   "description": "Factura Electrónica de Venta DIAN Colombia y Documento Equivalente POS.",
   "type": "object",
   "x-extractor": "dian_factura",
+  "x-vision-fallback-fields": ["uuid", "supplier_code"],
   "required": [],
   "properties": {
     "supplier_code": {

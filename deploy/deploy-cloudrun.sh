@@ -37,6 +37,27 @@
 #
 set -euo pipefail
 
+SLACK_WEBHOOK_URL="${SLACK_WEBHOOK_URL}"
+COMPONENT_NAME="idp-service"
+
+notify_slack() {
+    local status=$1
+    local env=$2
+    local branch
+    branch=$(git -C "${PROJECT_ROOT}" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+    local text=""
+    
+    if [ "$status" == "start" ]; then
+        text="🚀 Iniciando despliegue de *${COMPONENT_NAME}*\n• Ambiente: \`${env}\`\n• Rama: \`${branch}\`"
+    elif [ "$status" == "success" ]; then
+        text="✅ Despliegue exitoso de *${COMPONENT_NAME}*\n• Ambiente: \`${env}\`\n• Rama: \`${branch}\`"
+    fi
+
+    if [ -n "$text" ]; then
+        curl -s -X POST -H 'Content-type: application/json' --data "{\"text\":\"${text}\"}" "${SLACK_WEBHOOK_URL}" > /dev/null || true
+    fi
+}
+
 # --- Resolución de configuración ---------------------------------------------
 PROJECT_ID="${PROJECT_ID:-datak-production}"
 REGION="${REGION:-us-central1}"
@@ -105,6 +126,7 @@ AUTH_FLAG="--no-allow-unauthenticated"
 [[ "${ALLOW_UNAUTH}" == "true" ]] && AUTH_FLAG="--allow-unauthenticated"
 
 log "Desplegando ${SERVICE} en Cloud Run (${REGION}) con LLM_PROVIDER=${LLM_PROVIDER}"
+notify_slack "start" "${ENVIRONMENT}"
 gcloud run deploy "${SERVICE}" \
   --image="${IMAGE}:${TAG}" \
   --region="${REGION}" \
@@ -123,6 +145,7 @@ gcloud run deploy "${SERVICE}" \
 # --- 6. Resultado -------------------------------------------------------------
 URL="$(gcloud run services describe "${SERVICE}" --region="${REGION}" --format='value(status.url)')"
 log "Despliegue completado"
+notify_slack "success" "${ENVIRONMENT}"
 echo "  Servicio:  ${SERVICE}"
 echo "  Imagen:    ${IMAGE}:${TAG}"
 echo "  Provider:  ${LLM_PROVIDER} (sin LLM real)"

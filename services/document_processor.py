@@ -24,7 +24,13 @@ from typing import Any
 
 from jsonschema import Draft7Validator
 
-from core.exceptions import OutputValidationError, SchemaNotFoundError
+from core.config import settings
+from core.exceptions import (
+    InvalidPDFError,
+    NoNativeTextError,
+    OutputValidationError,
+    SchemaNotFoundError,
+)
 from core.logging import get_logger, log
 from models.requests import (
     ExtractionMetadata,
@@ -58,9 +64,16 @@ def _clean_text(text: str) -> str:
 class DocumentProcessor:
     """Orquesta el pipeline VALIDATE → … → ASSEMBLE para un request de extracción."""
 
-    def __init__(self, registry: SchemaRegistry, llm: BaseLLMProvider) -> None:
+    def __init__(
+        self,
+        registry: SchemaRegistry,
+        llm: BaseLLMProvider,
+        vision: BaseLLMProvider | None = None,
+    ) -> None:
         self._registry = registry
         self._llm = llm
+        # Provider de visión para el fallback (Plan B). None = fallback deshabilitado.
+        self._vision = vision
 
     async def process(
         self,
@@ -75,11 +88,16 @@ class DocumentProcessor:
 
         Si el schema declara `"x-extractor": "<nombre>"`, se usa un extractor
         rule-based del paquete `services.extractors.<nombre>` en lugar del LLM.
+
+        Fallback a visión (Plan B, trigger híbrido): se deriva al modelo de visión
+        cuando el archivo es una imagen, cuando el PDF no tiene texto nativo, o
+        cuando el primer intento dejó vacíos los campos `x-vision-fallback-fields`
+        del schema.
         """
         t_start = time.perf_counter()
 
-        # 1. VALIDATE — magic bytes y tamaño (lanza InvalidPDFError → 400).
-        pdf_extractor.validate_pdf_bytes(content)
+        # 1. VALIDATE — tamaño y tipo de archivo: 'pdf' o 'image' (InvalidPDFError → 400).
+        kind = pdf_extractor.validate_input(content)
 
         # 2. LOAD SCHEMA — del registro en memoria.
         schema = self._registry.get(schema_id)
@@ -89,11 +107,31 @@ class DocumentProcessor:
                 f"schema_id '{schema_id}' no registrado. Disponibles: {available}"
             )
 
+        common = dict(
+            content=content,
+            kind=kind,
+            schema=schema,
+            schema_id=schema_id,
+            project_id=project_id,
+            trace_id=trace_id,
+            options=options,
+            t_start=t_start,
+        )
+
+        # Una imagen no tiene texto nativo: va directo a visión.
+        if kind == "image":
+            vision = await self._maybe_vision(reason="image_input", **common)
+            if vision is not None:
+                return vision
+            raise InvalidPDFError(
+                "el archivo es una imagen y el servicio no tiene visión habilitada"
+            )
+
         # 3. DISPATCH — rule-based o LLM según el schema.
         rule_extractor_name: str | None = schema.get("x-extractor")
 
         if rule_extractor_name:
-            return await self._process_rule_based(
+            response = await self._process_rule_based(
                 content=content,
                 schema=schema,
                 schema_id=schema_id,
@@ -101,8 +139,10 @@ class DocumentProcessor:
                 extractor_name=rule_extractor_name,
                 t_start=t_start,
             )
-        else:
-            return await self._process_llm(
+            return await self._vision_if_incomplete(response, reason="rule_based_incompleto", **common)
+
+        try:
+            response = await self._process_llm(
                 content=content,
                 schema=schema,
                 schema_id=schema_id,
@@ -111,6 +151,136 @@ class DocumentProcessor:
                 options=options,
                 t_start=t_start,
             )
+        except NoNativeTextError:
+            vision = await self._maybe_vision(reason="no_native_text", **common)
+            if vision is not None:
+                return vision
+            raise
+        return await self._vision_if_incomplete(response, reason="llm_incompleto", **common)
+
+    # ------------------------------------------------------------------
+    # Fallback a visión (Plan B)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _needs_vision(data: dict[str, Any], schema: dict[str, Any]) -> bool:
+        """True si algún campo crítico (`x-vision-fallback-fields`) quedó vacío.
+
+        Si el schema no declara campos críticos, el resultado nunca dispara visión
+        por esta vía (solo lo hace la ausencia de texto nativo / input imagen).
+        """
+        fields = schema.get("x-vision-fallback-fields") or []
+        return any(data.get(f) in (None, "", [], {}) for f in fields)
+
+    async def _vision_if_incomplete(
+        self,
+        response: ExtractResponse,
+        *,
+        reason: str,
+        schema: dict[str, Any],
+        **common: Any,
+    ) -> ExtractResponse:
+        """Devuelve la respuesta del intento 1, o la de visión si quedó incompleta."""
+        if not self._needs_vision(response.data, schema):
+            return response
+        vision = await self._maybe_vision(reason=reason, schema=schema, **common)
+        return vision if vision is not None else response
+
+    async def _maybe_vision(
+        self,
+        *,
+        reason: str,
+        **kwargs: Any,
+    ) -> ExtractResponse | None:
+        """Ejecuta el fallback de visión, o None si no hay provider configurado."""
+        if self._vision is None:
+            log(
+                logger,
+                logging.WARNING,
+                "fallback a visión solicitado pero VISION_PROVIDER no está configurado",
+                reason=reason,
+            )
+            return None
+        return await self._run_vision(reason=reason, **kwargs)
+
+    async def _run_vision(
+        self,
+        *,
+        reason: str,
+        content: bytes,
+        kind: str,
+        schema: dict[str, Any],
+        schema_id: str,
+        project_id: str,
+        trace_id: str,
+        options: ExtractOptions,
+        t_start: float,
+    ) -> ExtractResponse:
+        """Rasteriza el documento y extrae los campos con el modelo de visión."""
+        assert self._vision is not None  # garantizado por _maybe_vision
+
+        images = pdf_extractor.render_images(
+            content,
+            kind,
+            max_pages=settings.VISION_MAX_PAGES,
+            dpi=settings.VISION_RENDER_DPI,
+        )
+
+        t0 = time.perf_counter()
+        raw_data, usage = await self._vision.extract_vision(
+            images=images,
+            schema=schema,
+            trace_id=trace_id,
+            hints=options.hints,
+        )
+        vision_time_ms = _ms(t0)
+
+        t0 = time.perf_counter()
+        data = normalizer.normalize(raw_data, schema)
+        normalization_time_ms = _ms(t0)
+
+        _validate_output(schema, data, raw_label="raw_vision_output", raw_value=raw_data)
+
+        processing_time_ms = _ms(t_start)
+        field_metadata = {
+            key: FieldMetadata(confidence=None) for key in schema.get("properties", {})
+        }
+        metadata = ExtractionMetadata(
+            pages_processed=len(images),
+            extractor_used="vision",
+            fallback_reason=f"{reason} → visión",
+            processing_time_ms=processing_time_ms,
+            extraction_time_ms=0,
+            llm_time_ms=vision_time_ms,
+            normalization_time_ms=normalization_time_ms,
+            llm_provider=settings.VISION_PROVIDER,
+            llm_model=settings.VISION_MODEL,
+            token_usage=TokenUsage(input=usage.input_tokens, output=usage.output_tokens),
+            cost_usd_estimated=usage.cost_usd_estimated,
+            confidence_available=False,
+            truncated=False,
+        )
+
+        log(
+            logger,
+            logging.INFO,
+            "request resuelto por visión (fallback)",
+            reason=reason,
+            processing_time_ms=processing_time_ms,
+            llm_provider=settings.VISION_PROVIDER,
+            llm_model=settings.VISION_MODEL,
+            token_usage_input=usage.input_tokens,
+            token_usage_output=usage.output_tokens,
+            cost_usd_estimated=usage.cost_usd_estimated,
+        )
+
+        return ExtractResponse(
+            schema_id=schema_id,
+            project_id=project_id,
+            extraction_metadata=metadata,
+            data=data,
+            field_metadata=field_metadata,
+        )
 
     # ------------------------------------------------------------------
     # Pipeline rule-based (sin LLM)
@@ -150,22 +320,7 @@ class DocumentProcessor:
         normalization_time_ms = _ms(t0)
 
         # 5. VALIDATE OUTPUT — validación final contra el JSON Schema.
-        errors = sorted(
-            Draft7Validator(schema).iter_errors(data), key=lambda e: e.path
-        )
-        if errors:
-            detail = "; ".join(
-                f"{'/'.join(str(p) for p in e.path) or '(raíz)'}: {e.message}"
-                for e in errors[:10]
-            )
-            log(
-                logger,
-                logging.WARNING,
-                "output rule-based no validó contra el schema",
-                validation_errors=detail,
-                raw_extractor_output=raw_data,
-            )
-            raise OutputValidationError()
+        _validate_output(schema, data, raw_label="raw_extractor_output", raw_value=raw_data)
 
         # 6. ASSEMBLE RESPONSE.
         processing_time_ms = _ms(t_start)
@@ -246,22 +401,7 @@ class DocumentProcessor:
         normalization_time_ms = _ms(t0)
 
         # 7. VALIDATE OUTPUT — validación final contra el JSON Schema.
-        errors = sorted(
-            Draft7Validator(schema).iter_errors(data), key=lambda e: e.path
-        )
-        if errors:
-            detail = "; ".join(
-                f"{'/'.join(str(p) for p in e.path) or '(raíz)'}: {e.message}"
-                for e in errors[:10]
-            )
-            log(
-                logger,
-                logging.WARNING,
-                "output normalizado no validó contra el schema",
-                validation_errors=detail,
-                raw_llm_output=raw_data,
-            )
-            raise OutputValidationError()
+        _validate_output(schema, data, raw_label="raw_llm_output", raw_value=raw_data)
 
         # 8. ASSEMBLE RESPONSE.
         processing_time_ms = _ms(t_start)
@@ -312,6 +452,35 @@ class DocumentProcessor:
 def _ms(start: float) -> int:
     """Milisegundos transcurridos desde `start` (perf_counter)."""
     return int((time.perf_counter() - start) * 1000)
+
+
+def _validate_output(
+    schema: dict[str, Any],
+    data: dict[str, Any],
+    *,
+    raw_label: str,
+    raw_value: Any,
+) -> None:
+    """Valida `data` contra el JSON Schema. Lanza OutputValidationError si falla.
+
+    Loggea el raw output (con la etiqueta indicada) como WARNING para diagnóstico,
+    sin exponerlo nunca al cliente.
+    """
+    errors = sorted(Draft7Validator(schema).iter_errors(data), key=lambda e: e.path)
+    if not errors:
+        return
+    detail = "; ".join(
+        f"{'/'.join(str(p) for p in e.path) or '(raíz)'}: {e.message}"
+        for e in errors[:10]
+    )
+    log(
+        logger,
+        logging.WARNING,
+        "output no validó contra el schema",
+        validation_errors=detail,
+        **{raw_label: raw_value},
+    )
+    raise OutputValidationError()
 
 
 def _provider_name() -> str:

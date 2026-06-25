@@ -30,6 +30,20 @@ class MockProvider(BaseLLMProvider):
         trace_id: str,
         hints: str | None = None,
     ) -> tuple[dict, UsageMetrics]:
+        return self._empty_output(schema)
+
+    async def extract_vision(
+        self,
+        images: list[tuple[str, bytes]],
+        schema: dict,
+        trace_id: str,
+        hints: str | None = None,
+    ) -> tuple[dict, UsageMetrics]:
+        # Ignora las imágenes; emite el mismo output vacío válido que extract().
+        return self._empty_output(schema)
+
+    @staticmethod
+    def _empty_output(schema: dict) -> tuple[dict, UsageMetrics]:
         properties = schema.get("properties", {})
         data: dict[str, Any] = {
             key: _empty_value(prop) for key, prop in properties.items()

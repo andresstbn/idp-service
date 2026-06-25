@@ -23,20 +23,75 @@ from models.extraction import ExtractionResult
 
 logger = get_logger("idp.pdf_extractor")
 
-# Magic bytes de un archivo PDF.
+# Magic bytes por tipo de archivo soportado.
 _PDF_MAGIC = b"%PDF-"
 
 
-def validate_pdf_bytes(content: bytes) -> None:
-    """Valida magic bytes y tamaño máximo. Lanza InvalidPDFError si falla."""
-    if not content[:5].startswith(_PDF_MAGIC):
-        raise InvalidPDFError("el archivo no es un PDF válido (magic bytes)")
+def _image_mime(content: bytes) -> str | None:
+    """MIME de la imagen por magic bytes, o None si no es una imagen soportada."""
+    if content[:8].startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if content[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    if content[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
+    if content[:4] == b"RIFF" and content[8:12] == b"WEBP":
+        return "image/webp"
+    return None
 
+
+def _detect_kind(content: bytes) -> str | None:
+    """Detecta el tipo de archivo por magic bytes: 'pdf' | 'image' | None."""
+    if content[:5].startswith(_PDF_MAGIC):
+        return "pdf"
+    if _image_mime(content) is not None:
+        return "image"
+    return None
+
+
+def validate_input(content: bytes) -> str:
+    """Valida tamaño y tipo de archivo. Devuelve 'pdf' o 'image'.
+
+    Lanza InvalidPDFError si el archivo no es un PDF ni una imagen soportada, o si
+    supera el tamaño máximo.
+    """
     max_bytes = settings.PDF_MAX_SIZE_MB * 1024 * 1024
     if len(content) > max_bytes:
         raise InvalidPDFError(
-            f"el PDF supera el tamaño máximo de {settings.PDF_MAX_SIZE_MB} MB"
+            f"el archivo supera el tamaño máximo de {settings.PDF_MAX_SIZE_MB} MB"
         )
+
+    kind = _detect_kind(content)
+    if kind is None:
+        raise InvalidPDFError(
+            "el archivo no es un PDF ni una imagen soportada (PNG/JPEG/GIF/WebP)"
+        )
+    return kind
+
+
+def render_images(
+    content: bytes,
+    kind: str,
+    *,
+    max_pages: int,
+    dpi: int,
+) -> list[tuple[str, bytes]]:
+    """Renderiza el documento a imágenes para enviar a un modelo de visión.
+
+    Devuelve una lista de (mime, bytes). Para un PDF, rasteriza las primeras
+    `max_pages` páginas a PNG. Para una imagen, la devuelve tal cual (un solo ítem).
+    """
+    if kind == "image":
+        mime = _image_mime(content) or "image/png"
+        return [(mime, content)]
+
+    images: list[tuple[str, bytes]] = []
+    with fitz.open(stream=content, filetype="pdf") as doc:
+        page_count = min(max_pages, doc.page_count)
+        for idx in range(page_count):
+            pix = doc[idx].get_pixmap(dpi=dpi)
+            images.append(("image/png", pix.tobytes("png")))
+    return images
 
 
 def _resolve_page_indices(

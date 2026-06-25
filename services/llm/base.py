@@ -24,6 +24,15 @@ SYSTEM_PROMPT = (
     "- No agregues campos que no estén en el esquema."
 )
 
+# Prompt para extracción por visión: mismas reglas, pero leyendo de la imagen y
+# devolviendo SOLO un objeto JSON (no hay tool-use garantizado vía OpenAI-compat).
+VISION_SYSTEM_PROMPT = (
+    SYSTEM_PROMPT
+    + "\n\nEl documento se te entrega como imagen(es). Lee su contenido y responde "
+    "ÚNICAMENTE con un objeto JSON que cumpla este JSON Schema, sin texto adicional "
+    "ni bloques de código:\n"
+)
+
 
 class BaseLLMProvider(ABC):
     """Contrato que toda implementación de proveedor LLM debe cumplir."""
@@ -41,3 +50,17 @@ class BaseLLMProvider(ABC):
         Debe lanzar LLMExtractionError si falla tras agotar los reintentos.
         """
         ...
+
+    async def extract_vision(
+        self,
+        images: list[tuple[str, bytes]],
+        schema: dict,
+        trace_id: str,
+        hints: str | None = None,
+    ) -> tuple[dict, UsageMetrics]:
+        """Extrae desde imágenes (mime, bytes). Por defecto no soportado.
+
+        Los providers de visión la sobreescriben. Debe lanzar LLMExtractionError si
+        falla tras agotar los reintentos.
+        """
+        raise NotImplementedError("este provider no soporta extracción por visión")

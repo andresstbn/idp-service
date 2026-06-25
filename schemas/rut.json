@@ -5,6 +5,7 @@
   "type": "object",
   "additionalProperties": false,
   "x-extractor": "dian_rut",
+  "x-vision-fallback-fields": ["nit", "person_type"],
   "required": [],
   "properties": {
     "nit": {
