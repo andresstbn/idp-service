@@ -58,6 +58,27 @@ notify_slack() {
     fi
 }
 
+# Directorio raíz del proyecto (un nivel por encima de deploy/).
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "${SCRIPT_DIR}")"
+
+log() { printf '\n\033[1;34m▶ %s\033[0m\n' "$*"; }
+
+# --- Cargar variables desde .env si existe ------------------------------------
+if [ -f "${PROJECT_ROOT}/.env" ]; then
+  log "Cargando variables de entorno desde .env..."
+  while IFS= read -r line || [ -n "$line" ]; do
+    line=$(echo "$line" | xargs)
+    if [[ ! "$line" =~ ^# ]] && [[ "$line" == *=* ]]; then
+      key="${line%%=*}"
+      val="${line#*=}"
+      if [ -z "${!key:-}" ]; then
+        export "$key"="$val"
+      fi
+    fi
+  done < "${PROJECT_ROOT}/.env"
+fi
+
 # --- Resolución de configuración ---------------------------------------------
 PROJECT_ID="${PROJECT_ID:-datak-production}"
 REGION="${REGION:-us-central1}"
@@ -74,23 +95,27 @@ CONCURRENCY="${CONCURRENCY:-8}"
 MIN_INSTANCES="${MIN_INSTANCES:-0}"
 MAX_INSTANCES="${MAX_INSTANCES:-2}"
 
+# Visión (Plan B)
+VISION_PROVIDER="${VISION_PROVIDER:-}"
+VISION_MODEL="${VISION_MODEL:-deepseek-chat}"
+
 IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}/${SERVICE}"
-
-# Directorio raíz del proyecto (un nivel por encima de deploy/).
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(dirname "${SCRIPT_DIR}")"
-
-log() { printf '\n\033[1;34m▶ %s\033[0m\n' "$*"; }
 
 # --- 1. Validaciones previas --------------------------------------------------
 command -v gcloud >/dev/null || { echo "gcloud no está instalado"; exit 1; }
 gcloud config set project "${PROJECT_ID}" >/dev/null
 
-# Aviso si se intenta usar un provider real sin la complejidad de secretos.
-if [[ "${LLM_PROVIDER}" != "mock" ]]; then
-  echo "AVISO: LLM_PROVIDER=${LLM_PROVIDER} requiere inyectar la API key como secreto."
-  echo "       Este script está simplificado para 'mock'. Reintroduce Secret Manager"
-  echo "       antes de desplegar con un provider real (ver cabecera / RULES §R10)."
+# Validaciones de llaves requeridas
+if [[ "${LLM_PROVIDER}" == "anthropic" && -z "${ANTHROPIC_API_KEY:-}" ]]; then
+  echo "ERROR: LLM_PROVIDER=anthropic requiere ANTHROPIC_API_KEY configurada."
+  exit 1
+fi
+if [[ "${LLM_PROVIDER}" == "openai" && -z "${OPENAI_API_KEY:-}" ]]; then
+  echo "ERROR: LLM_PROVIDER=openai requiere OPENAI_API_KEY configurada."
+  exit 1
+fi
+if [[ "${VISION_PROVIDER}" == "deepseek" && -z "${DEEPSEEK_API_KEY:-}" ]]; then
+  echo "ERROR: VISION_PROVIDER=deepseek requiere DEEPSEEK_API_KEY configurada."
   exit 1
 fi
 
@@ -121,11 +146,43 @@ gcloud builds submit "${PROJECT_ROOT}" \
   --tag "${IMAGE}:${TAG}"
 
 # --- 5. Despliegue a Cloud Run -----------------------------------------------
-# Sin secretos: en modo mock no se necesita API key del LLM.
 AUTH_FLAG="--no-allow-unauthenticated"
 [[ "${ALLOW_UNAUTH}" == "true" ]] && AUTH_FLAG="--allow-unauthenticated"
 
-log "Desplegando ${SERVICE} en Cloud Run (${REGION}) con LLM_PROVIDER=${LLM_PROVIDER}"
+# Definición de variables a inyectar dinámicamente en Cloud Run
+IDP_KEYS=(
+  LLM_PROVIDER
+  LLM_MODEL
+  ANTHROPIC_API_KEY
+  OPENAI_API_KEY
+  LLM_MAX_RETRIES
+  VISION_PROVIDER
+  VISION_MODEL
+  DEEPSEEK_API_KEY
+  VISION_MAX_PAGES
+  VISION_RENDER_DPI
+  SCHEMAS_DIR
+  PDF_MIN_CHARS_PER_PAGE
+  PDF_MAX_SIZE_MB
+  PDF_MAX_PAGES_FULL
+  LOG_LEVEL
+  ENVIRONMENT
+  SERVICE_VERSION
+)
+
+ENV_VARS_ARGS=""
+for key in "${IDP_KEYS[@]}"; do
+  val="${!key:-}"
+  if [ -n "$val" ]; then
+    if [ -z "$ENV_VARS_ARGS" ]; then
+      ENV_VARS_ARGS="${key}=${val}"
+    else
+      ENV_VARS_ARGS="${ENV_VARS_ARGS},${key}=${val}"
+    fi
+  fi
+done
+
+log "Desplegando ${SERVICE} en Cloud Run (${REGION}) con variables del entorno"
 notify_slack "start" "${ENVIRONMENT}"
 gcloud run deploy "${SERVICE}" \
   --image="${IMAGE}:${TAG}" \
@@ -139,7 +196,7 @@ gcloud run deploy "${SERVICE}" \
   --min-instances="${MIN_INSTANCES}" \
   --max-instances="${MAX_INSTANCES}" \
   --port=8080 \
-  --set-env-vars="LLM_PROVIDER=${LLM_PROVIDER},LLM_MODEL=${LLM_MODEL},ENVIRONMENT=${ENVIRONMENT}" \
+  --set-env-vars="${ENV_VARS_ARGS}" \
   ${AUTH_FLAG}
 
 # --- 6. Resultado -------------------------------------------------------------
