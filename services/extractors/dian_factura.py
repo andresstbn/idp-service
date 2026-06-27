@@ -349,7 +349,7 @@ def _normalize_colombian_number(text: str) -> str:
     return result
 
 
-def _detect_column_x(items_lines: list[Line]) -> dict[str, float]:
+def _detect_column_x(items_lines: list[Line]) -> dict[str, float | None]:
     """Detecta las posiciones X de las columnas desde el encabezado de la tabla.
 
     Devuelve un dict con claves: 'um', 'cantidad', 'precio', 'iva', 'inc',
@@ -389,7 +389,9 @@ def _detect_column_x(items_lines: list[Line]) -> dict[str, float]:
         if len(pcts_after_iva) >= 2:
             col["inc_pct"] = pcts_after_iva[1]
 
-    # Valores por defecto basados en el layout típico de factura DIAN (A4, márgenes ~35pt)
+    # Valores por defecto basados en el layout típico de factura DIAN (A4, márgenes ~35pt).
+    # inc_pct queda en None si la factura no trae columna INC: NO se inventa una
+    # posición, porque el default antiguo (530) caía sobre la columna de Total/fecha.
     return {
         "um": col.get("um", 242.0),
         "cantidad": col.get("cantidad", 285.0),
@@ -397,7 +399,7 @@ def _detect_column_x(items_lines: list[Line]) -> dict[str, float]:
         "iva": col.get("iva", 460.0),
         "inc": col.get("inc", 510.0),
         "iva_pct": col.get("iva_pct", 490.0),
-        "inc_pct": col.get("inc_pct", 530.0),
+        "inc_pct": col.get("inc_pct"),  # None si no hay columna INC
     }
 
 
@@ -414,9 +416,35 @@ def _find_data_start(items_lines: list[Line]) -> int:
     return len(items_lines)  # Sin datos
 
 
+def _pick_percentage(line: Line, pct_x: float | None) -> str:
+    """Extrae un porcentaje (IVA/INC) cerca de la coordenada X de su columna.
+
+    Devuelve "" si la columna no existe (pct_x None), si no hay valor, o si el
+    candidato no es un porcentaje plausible (0–100); esto evita capturar la
+    columna de Total ítem cuando la celda del porcentaje está vacía.
+    ponytail: límite duro 0–100, las tarifas DIAN nunca lo superan.
+    """
+    if pct_x is None:
+        return ""
+    for w in line:
+        token = w[4]
+        if not (pct_x - 15 <= w[0] <= pct_x + 30) or not re.search(r"\d", token):
+            continue
+        # Un total tipo "1.500" o "1.500,00" lleva grupo de miles → no es %.
+        if re.search(r"\d\.\d{3}(\D|$)", token):
+            continue
+        value = _normalize_colombian_number(token)
+        try:
+            if 0 <= float(value) <= 100:
+                return value
+        except ValueError:
+            continue
+    return ""
+
+
 def _parse_item_row(
     line: Line,
-    col: dict[str, float],
+    col: dict[str, float | None],
 ) -> dict[str, Any] | None:
     """Parsea una fila de ítem usando rangos de coordenada X."""
     if not line:
@@ -457,19 +485,12 @@ def _parse_item_row(
     price_raw = price_words[0] if price_words else ""
     price = _normalize_colombian_number(price_raw)
 
-    # IVA %: cerca de iva_pct_x
-    iva_words = [
-        w[4] for w in line
-        if iva_pct_x - 15 <= w[0] <= iva_pct_x + 30 and re.search(r"\d", w[4])
-    ]
-    iva_pct = _normalize_colombian_number(iva_words[0]) if iva_words else ""
-
-    # INC %: cerca de inc_pct_x
-    inc_words = [
-        w[4] for w in line
-        if inc_pct_x - 15 <= w[0] <= inc_pct_x + 30 and re.search(r"\d", w[4])
-    ]
-    inc_pct = _normalize_colombian_number(inc_words[0]) if inc_words else ""
+    # IVA % e INC %: cerca de su columna. Se valida que el valor sea un
+    # porcentaje plausible (0–100) para no capturar la columna de Total ítem,
+    # cuyo valor (p. ej. 1.500) caería en el rango de coordenadas cuando el
+    # ítem no tiene impuesto y la celda del % está vacía.
+    iva_pct = _pick_percentage(line, iva_pct_x)
+    inc_pct = _pick_percentage(line, inc_pct_x)
 
     if not description and not unit_code and not price:
         return None
