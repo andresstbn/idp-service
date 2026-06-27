@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# pre-commit — barrera local contra secretos. Activar una vez con:
+#   git config core.hooksPath .githooks
+#
+# Bloquea el commit si en lo staged aparece un .env real o un patrón de secreto.
+# No sustituye a una revisión seria; es la red de seguridad barata (ponytail).
+set -euo pipefail
+
+staged=$(git diff --cached --name-only --diff-filter=ACM)
+
+# 1. .env reales (cualquiera salvo .env.example)
+bad_files=$(echo "$staged" | grep -E '(^|/)\.env($|\.)' | grep -v '\.env\.example$' || true)
+if [ -n "$bad_files" ]; then
+  echo "✗ Intentas commitear un .env con posibles secretos:"
+  echo "$bad_files" | sed 's/^/    /'
+  echo "  Quítalo del stage (git rm --cached) — usa .env.example con placeholders."
+  exit 1
+fi
+
+# 2. Patrones de secreto en el contenido staged
+pattern='hooks\.slack\.com/services/[A-Z0-9]|xox[baprs]-[0-9A-Za-z-]|sk-ant-[A-Za-z0-9-]{20}|sk-[a-zA-Z0-9]{32}|AKIA[0-9A-Z]{16}|gh[pousr]_[0-9A-Za-z]{20}|AIza[0-9A-Za-z_-]{35}|-----BEGIN [A-Z ]*PRIVATE KEY-----'
+# Sólo líneas añadidas (+), ignorando placeholders obvios (xxxx).
+hits=$(git diff --cached -U0 | grep -E '^\+' | grep -vE 'x{6,}|REDACTED|EXAMPLE|placeholder' | grep -nE "$pattern" || true)
+if [ -n "$hits" ]; then
+  echo "✗ Posible secreto en el diff staged:"
+  echo "$hits" | sed 's/^/    /'
+  echo "  Si es un falso positivo, commitea con --no-verify (bajo tu responsabilidad)."
+  exit 1
+fi

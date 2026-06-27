@@ -175,6 +175,29 @@ raise OutputValidationError()  # public_message genérico
 
 ---
 
+## R11. Higiene de secretos (repo público)
+
+Este repositorio es **público**. Ningún secreto real puede entrar al working tree
+ni al historial.
+
+- **Nunca** hardcodear claves, tokens, webhooks ni URLs con credenciales en código,
+  scripts o docs. Se leen siempre desde el entorno (`SLACK_WEBHOOK_URL`,
+  `*_API_KEY`, etc.), nunca literales.
+- El `.env` real **jamás se commitea** (ya está en `.gitignore`). Solo se versiona
+  `.env.example` con **placeholders** (`sk-ant-xxxx`, valores vacíos), nunca valores
+  reales.
+- Toda variable nueva con valor sensible va a `.env.example` **vacía** y al entorno
+  de despliegue como **secreto** (Secret Manager), nunca en `--set-env-vars` en claro
+  ni en la imagen (ver R10).
+- Activa la red de seguridad local una vez por clon:
+  `git config core.hooksPath .githooks` (bloquea `.env` y patrones de secreto al
+  commitear; ver `.githooks/pre-commit`).
+- Si un secreto se filtra al historial: **rótalo** (asúmelo comprometido) y **reescribe
+  el historial** (`git filter-repo --replace-text`) + force-push. No basta con borrarlo
+  en un commit nuevo: queda en commits anteriores.
+
+---
+
 ## Checklist antes de cerrar un cambio
 
 - [ ] Compila (`py_compile` de todos los módulos).
@@ -182,7 +205,8 @@ raise OutputValidationError()  # public_message genérico
 - [ ] Pipeline end-to-end probado con PDF real + LLM stub (ver AGENTS.md §5).
 - [ ] Errores no exponen trazas ni raw LLM output; todos llevan `trace_id`.
 - [ ] El log de finalización trae los campos numéricos de métricas.
-- [ ] Config nueva en `core/config.py` **y** en `.env.example`.
+- [ ] Config nueva en `core/config.py` **y** en `.env.example` (placeholder, sin valor real).
+- [ ] Sin secretos hardcodeados; `.env` no está staged (R11).
 - [ ] Comentarios en español, identificadores en inglés.
 - [ ] No se rompió el contrato `/v1` (o se versionó).
 - [ ] `requirements.txt` con `==` y sin dependencias injustificadas.

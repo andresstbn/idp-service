@@ -189,3 +189,5 @@ Estas son no negociables; la lista completa con justificación está en
 5. Comentarios en **español**; identificadores (variables/funciones/clases) en **inglés**.
 6. No se agregan dependencias fuera de `requirements.txt` sin justificación en comentario.
 7. No hay stubs vacíos ni módulos sin contrato.
+8. **Repo público: cero secretos** en código o historial. Claves/webhooks solo desde
+   el entorno; `.env` nunca se commitea. Ver [`RULES.md`](RULES.md) §R11.

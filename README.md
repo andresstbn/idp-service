@@ -122,6 +122,11 @@ Todas se documentan en [`.env.example`](.env.example). Requeridas:
 Si el provider configurado no está implementado o le falta su API key, el servicio
 **falla en el arranque**, no en runtime.
 
+> **Secretos (repo público).** Las claves van solo en tu `.env` local (gitignored),
+> nunca en commits. `.env.example` usa placeholders. Activa la red de seguridad local
+> con `git config core.hooksPath .githooks` — bloquea `.env` y patrones de secreto al
+> commitear. Política completa en [`RULES.md`](RULES.md) §R11.
+
 ---
 
 ## Despliegue en Cloud Run
