@@ -124,7 +124,8 @@
           },
           "discount_amount": {
             "type": ["string", "null"],
-            "description": "Monto del descuento comercial de la línea, en pesos, tal como aparece impreso (columna 'Descuento' / 'Dto.'). Ej: '100840.34'. Cadena vacía, '0' o null si la línea no tiene descuento."
+            "pattern": "^$|^[0-9]+(\\.[0-9]+)?$",
+            "description": "Monto del descuento comercial de la línea, en pesos, tal como aparece impreso (columna 'Descuento' / 'Dto.'). Ej: '100840.34'. El extractor emite cadena vacía cuando la línea no tiene descuento (igual que iva_percentage/inc_percentage); '0' y null significan lo mismo y también se aceptan."
           }
         }
       }

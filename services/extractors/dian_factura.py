@@ -47,7 +47,11 @@ _ITEMS_START = "detalles de productos"
 _ITEMS_ENDS = {"notas finales", "referencias", "datos totales"}
 
 # Encabezados de la columna de descuento comercial por línea (ya sin el punto final).
-_DISCOUNT_HEADERS = {"descuento", "dto", "dcto", "descto"}
+_DISCOUNT_HEADERS = {"descuento", "descuentos", "desc", "dto", "dcto", "descto"}
+
+# Forma de un monto impreso: "1.500", "100.840,34", "10185.1900", "$0". Rechaza
+# fechas ("2025-02-28") y códigos, que por sola coordenada se colarían al campo.
+_AMOUNT_RE = re.compile(r"^\$?\d{1,3}(?:\.\d{3})+(?:,\d{1,4})?$|^\$?\d+(?:[.,]\d{1,4})?$")
 
 # ─── Etiquetas conocidas (para truncar valores al encontrar la siguiente) ─────
 
@@ -356,8 +360,12 @@ def _detect_column_x(items_lines: list[Line]) -> dict[str, float | None]:
     """Detecta las posiciones X de las columnas desde el encabezado de la tabla.
 
     Devuelve un dict con claves: 'um', 'cantidad', 'precio', 'descuento',
-    'recargo', 'iva', 'inc', 'iva_pct', 'inc_pct'. Los valores son la coordenada
-    X0 de cada columna. Usa valores por defecto si no puede detectar el encabezado.
+    'descuento_from', 'descuento_to', 'iva', 'inc', 'iva_pct', 'inc_pct'. Los
+    valores son la coordenada X0 de cada columna. Usa valores por defecto si no
+    puede detectar el encabezado.
+
+    Los encabezados se comparan sin distinguir mayúsculas ni el punto final, para
+    que una plantilla con el encabezado en mayúsculas no caiga a los defaults.
     """
     col: dict[str, float] = {}
     pct_xs: list[float] = []
@@ -366,26 +374,26 @@ def _detect_column_x(items_lines: list[Line]) -> dict[str, float | None]:
     # Escanear las primeras líneas buscando palabras de encabezado
     for line in items_lines[:8]:
         lt = _line_text(line)
-        if not any(k in lt for k in ("U/M", "Cantidad", "Descripci", "Nro")):
+        if not any(k in lt.lower() for k in ("u/m", "cantidad", "descripci", "nro")):
             continue
         for word in line:
-            t, x = word[4], word[0]
-            if t == "U/M" and "um" not in col:
+            t, x = word[4].lower().rstrip("."), word[0]
+            if t == "u/m" and "um" not in col:
                 col["um"] = x
-            elif t == "Cantidad" and "cantidad" not in col:
+            elif t == "cantidad" and "cantidad" not in col:
                 col["cantidad"] = x
-            elif t == "Precio" and "precio" not in col:
+            elif t == "precio" and "precio" not in col:
                 col["precio"] = x
-            elif t.lower().rstrip(".") in _DISCOUNT_HEADERS and "descuento" not in col:
+            elif t in _DISCOUNT_HEADERS and "descuento" not in col:
                 col["descuento"] = x
-            elif t == "Recargo" and "recargo" not in col:
+            elif t == "recargo" and "recargo" not in col:
                 col["recargo"] = x
-            elif t == "IVA" and "iva" not in col:
+            elif t == "iva" and "iva" not in col:
                 col["iva"] = x
                 iva_x = x
-            elif t == "INC" and "inc" not in col:
+            elif t == "inc" and "inc" not in col:
                 col["inc"] = x
-            elif t == "%" :
+            elif t == "%":
                 pct_xs.append(x)
 
     # Asignar posiciones de los porcentajes (primero IVA %, luego INC %)
@@ -396,6 +404,8 @@ def _detect_column_x(items_lines: list[Line]) -> dict[str, float | None]:
         if len(pcts_after_iva) >= 2:
             col["inc_pct"] = pcts_after_iva[1]
 
+    descuento_from, descuento_to = _discount_window(col)
+
     # Valores por defecto basados en el layout típico de factura DIAN (A4, márgenes ~35pt).
     # inc_pct y descuento quedan en None si la factura no trae esa columna: NO se
     # inventa una posición, porque el default antiguo de inc_pct (530) caía sobre la
@@ -405,12 +415,32 @@ def _detect_column_x(items_lines: list[Line]) -> dict[str, float | None]:
         "cantidad": col.get("cantidad", 285.0),
         "precio": col.get("precio", 335.0),
         "descuento": col.get("descuento"),  # None si no hay columna Descuento
-        "recargo": col.get("recargo"),
+        "descuento_from": descuento_from,
+        "descuento_to": descuento_to,
         "iva": col.get("iva", 460.0),
         "inc": col.get("inc", 510.0),
         "iva_pct": col.get("iva_pct", 490.0),
         "inc_pct": col.get("inc_pct"),  # None si no hay columna INC
     }
+
+
+def _discount_window(col: dict[str, float]) -> tuple[float | None, float | None]:
+    """Ventana [desde, hasta) de la celda de descuento, o (None, None) si no hay columna.
+
+    Se calcula solo con columnas **realmente detectadas** (`col` no trae defaults):
+    acotar con un default se pasaría de columna y leería el recargo o el total.
+    El borde es el punto medio con la columna vecina porque los montos van
+    alineados a la derecha, así que el x0 del valor cae a la izquierda del x0 de
+    su encabezado tanto como el número sea más ancho que la etiqueta.
+    """
+    x = col.get("descuento")
+    if x is None:
+        return None, None
+    left = [v for v in col.values() if v < x]
+    right = [v for v in col.values() if v > x]
+    start = (max(left) + x) / 2 if left else x - 20.0
+    end = (x + min(right)) / 2 if right else x + 45.0
+    return start, end
 
 
 def _find_data_start(items_lines: list[Line]) -> int:
@@ -455,26 +485,14 @@ def _pick_percentage(line: Line, pct_x: float | None) -> str:
 def _pick_amount(line: Line, x_start: float, x_end: float) -> str:
     """Extrae el primer valor monetario dentro de la ventana [x_start, x_end).
 
-    El "$" se ignora porque no trae dígitos. Devuelve "" si la celda está vacía.
+    Solo acepta tokens con forma de monto: igual que `_pick_percentage`, la
+    ventana de coordenadas por sí sola deja pasar basura de la columna vecina
+    (una fecha, un código) cuando la celda está vacía. Devuelve "" si no hay valor.
     """
     for w in line:
-        if x_start - 8 <= w[0] < x_end and re.search(r"\d", w[4]):
+        if x_start <= w[0] < x_end and _AMOUNT_RE.match(w[4]):
             return _normalize_colombian_number(w[4])
     return ""
-
-
-def _next_column_x(col: dict[str, float | None], after_x: float) -> float:
-    """X de la primera columna conocida a la derecha de after_x.
-
-    Acota la ventana de una celda para no leer la columna siguiente cuando la
-    celda está vacía. Sin columna conocida a la derecha, usa un ancho típico.
-    """
-    candidates = [
-        x
-        for key in ("recargo", "iva", "iva_pct")
-        if (x := col[key]) is not None and x > after_x
-    ]
-    return min(candidates) if candidates else after_x + 45.0
 
 
 def _parse_item_row(
@@ -493,7 +511,8 @@ def _parse_item_row(
     um_x = col["um"]
     cantidad_x = col["cantidad"]
     precio_x = col["precio"]
-    descuento_x = col["descuento"]
+    descuento_from = col["descuento_from"]
+    descuento_to = col["descuento_to"]
     iva_pct_x = col["iva_pct"]
     inc_pct_x = col["inc_pct"]
 
@@ -512,11 +531,13 @@ def _parse_item_row(
     quantity = _normalize_colombian_number(qty_raw)
 
     # Precio unitario: entre precio_x e iva_pct_x - 80 (hay varias columnas intermedias)
-    # Saltamos el símbolo "$". Si la factura trae columna de Descuento, la ventana se
-    # corta ahí: con la celda de precio vacía se leería el descuento como precio.
+    # Saltamos el símbolo "$". Si hay columna de Descuento a la derecha del precio, la
+    # ventana se corta en su mismo borde: así son disjuntas (con la celda de precio
+    # vacía se leería el descuento como precio, y con las dos ventanas solapadas un
+    # mismo token contaba como precio y como descuento).
     price_x_end = iva_pct_x - 80
-    if descuento_x is not None:
-        price_x_end = min(price_x_end, descuento_x - 5)
+    if descuento_from is not None and descuento_from > precio_x:
+        price_x_end = min(price_x_end, descuento_from)
     price_words = [
         w[4] for w in line
         if precio_x - 5 <= w[0] < price_x_end and w[4] != "$" and re.search(r"\d", w[4])
@@ -533,8 +554,8 @@ def _parse_item_row(
 
     # Descuento comercial de la línea, en pesos. "" si la factura no trae la columna.
     discount_amount = (
-        _pick_amount(line, descuento_x, _next_column_x(col, descuento_x))
-        if descuento_x is not None
+        _pick_amount(line, descuento_from, descuento_to)
+        if descuento_from is not None and descuento_to is not None
         else ""
     )
 
@@ -626,6 +647,10 @@ def extract(content: bytes) -> dict[str, Any]:
         "extracción factura DIAN completada",
         supplier_code=result.get("supplier_code"),
         items_count=len(all_items),
+        # Una plantilla cuyo encabezado de descuento no reconocemos entrega todos los
+        # ítems sin descuento sin fallar: este contador es el único rastro para
+        # diagnosticarlo contra la factura impresa.
+        items_with_discount=sum(1 for i in all_items if i["discount_amount"]),
         supplier_fields=sum(1 for v in supplier.values() if v is not None),
     )
 
