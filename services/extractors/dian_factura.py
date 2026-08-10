@@ -54,7 +54,7 @@ _DISCOUNT_HEADERS = {"descuento", "descuentos", "dto", "dcto"}
 # Tokens de encabezado que identifican la fila de títulos de la tabla. Se comparan
 # como palabra completa: "nro" como subcadena aparecía dentro de descripciones
 # ("ENROLLADO") y dejaba que una fila de datos definiera las columnas.
-_HEADER_TOKENS = {"u/m", "cantidad", "descripción", "descripcion", "nro"}
+_HEADER_TOKENS = {"u/m", "cantidad", "nro"}
 
 # Forma de un monto impreso: "1.500", "100.840,34", "10185.1900", "$0", "10,185.19",
 # "-100.840,34", "(100.840,34)". Rechaza fechas ("2025-02-28") y códigos con letras,
@@ -83,6 +83,20 @@ _ALL_LABELS_LOWER = {
 
 
 # ─── Construcción de líneas ───────────────────────────────────────────────────
+
+def _norm_token(text: str) -> str:
+    """Normaliza una palabra para compararla con un encabezado conocido.
+
+    Quita la puntuación de los bordes, no solo el punto final: "Cantidad:" o
+    "(Cantidad)" dejaban de reconocerse y con ellos se perdían TODAS las columnas.
+    """
+    return text.lower().strip(".:,;()[]")
+
+
+def _is_header_token(token: str) -> bool:
+    """Los plurales y variantes de Descripción se aceptan por prefijo."""
+    return token in _HEADER_TOKENS or token.startswith("descripci")
+
 
 def _build_lines(words: list[Word], y_tol: float = 5.0) -> list[Line]:
     """Agrupa palabras en líneas horizontales (orden top-to-bottom).
@@ -381,14 +395,16 @@ def _detect_column_x(items_lines: list[Line]) -> dict[str, float | None]:
     pct_xs: list[float] = []
     iva_x: float | None = None
 
-    # Escanear las primeras líneas buscando palabras de encabezado. El escaneo se
-    # corta donde empiezan los datos: una fila de datos no debe definir columnas.
-    for line in items_lines[: min(8, _find_data_start(items_lines))]:
-        tokens = {w[4].lower().rstrip(".") for w in line}
-        if not tokens & _HEADER_TOKENS:
+    # Escanear las primeras líneas buscando palabras de encabezado. Las filas de datos
+    # se saltan (no deben definir columnas) pero no cortan el escaneo: cualquier línea
+    # previa que parezca datos, como una paginación "1 de 2", dejaría todo en defaults.
+    for line in items_lines[:8]:
+        if _is_data_row(line):
+            continue
+        if not any(_is_header_token(_norm_token(w[4])) for w in line):
             continue
         for word in line:
-            t, x = word[4].lower().rstrip("."), word[0]
+            t, x = _norm_token(word[4]), word[0]
             if t == "u/m" and "um" not in col:
                 col["um"] = x
             elif t == "cantidad" and "cantidad" not in col:
@@ -461,15 +477,17 @@ def _discount_window(col: dict[str, float]) -> tuple[float | None, float | None]
     return start, (x + min(right)) / 2
 
 
+def _is_data_row(line: Line) -> bool:
+    """Las filas de datos comienzan con el número del ítem (1,2,3...) a la izquierda."""
+    if not line:
+        return False
+    return bool(re.fullmatch(r"\d{1,2}", line[0][4])) and line[0][0] < 70
+
+
 def _find_data_start(items_lines: list[Line]) -> int:
-    """Retorna el índice de la primera línea de datos (row que empieza con dígito)."""
+    """Retorna el índice de la primera línea de datos."""
     for i, line in enumerate(items_lines):
-        if not line:
-            continue
-        first_word = line[0][4]
-        first_x = line[0][0]
-        # Las filas de datos comienzan con un número pequeño (1,2,3...) en posición izquierda
-        if re.fullmatch(r"\d{1,2}", first_word) and first_x < 70:
+        if _is_data_row(line):
             return i
     return len(items_lines)  # Sin datos
 
@@ -523,7 +541,12 @@ def _pick_amount(line: Line, x_start: float, x_end: float) -> str:
     """
     for w in line:
         if x_start <= w[0] < x_end and _AMOUNT_RE.match(w[4]):
-            return _normalize_amount(w[4])
+            amount = _normalize_amount(w[4])
+            # Solo la forma que declara el schema: un impreso malformado (punto de
+            # miles y punto de centavos, "10.185.19") no se puede normalizar y el
+            # extractor no debe emitir algo que reviente su propia validación final.
+            if re.fullmatch(r"\d+(?:\.\d+)?", amount):
+                return amount
     return ""
 
 
@@ -575,7 +598,10 @@ def _parse_item_row(
         if precio_x - 5 <= w[0] < price_x_end and w[4] != "$" and re.search(r"\d", w[4])
     ]
     price_raw = price_words[0] if price_words else ""
-    price = _normalize_colombian_number(price_raw)
+    # Misma normalización que el descuento: lo que el consumidor calcula es el
+    # descuento como porcentaje de price * quantity, así que las dos escalas tienen
+    # que coincidir. Arreglar solo una convierte un 70,59% en un 70.593%.
+    price = _normalize_amount(price_raw)
 
     # IVA % e INC %: cerca de su columna. Se valida que el valor sea un
     # porcentaje plausible (0–100) para no capturar la columna de Total ítem,

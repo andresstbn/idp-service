@@ -101,6 +101,48 @@ class TestItemDiscount(unittest.TestCase):
         ]
         item = _parse_item_row(row, col)
         self.assertEqual(item["discount_amount"], "100840")
+        # El precio se normaliza igual: el consumidor calcula el descuento como
+        # porcentaje de price * quantity, así que las dos escalas deben coincidir.
+        self.assertEqual(item["price"], "142848")
+
+    def test_monto_con_signo_parentesis_o_coma_de_miles(self):
+        col = _detect_column_x([_header()])
+        for printed, expected in (
+            ("-100.840,34", "100840.34"),   # el signo se descarta: se quiere la magnitud
+            ("(100.840,34)", "100840.34"),
+            ("10,185.19", "10185.19"),      # agrupación anglosajona
+            ("10.185.19", ""),              # malformado: no se emite, el schema lo rechazaría
+        ):
+            with self.subTest(printed=printed):
+                row = [
+                    _w(39.3, "1"), _w(58.9, "TORNILLOS"),
+                    _w(203.0, "1,00"), _w(255.0, "142.848,74"),
+                    _w(340.0, printed), _w(453.7, "19.00"),
+                ]
+                item = _parse_item_row(row, col)
+                self.assertEqual(item["discount_amount"], expected)
+
+    def test_encabezado_con_puntuacion_sigue_detectando_las_columnas(self):
+        """Sin reconocer la fila de títulos se pierden TODAS las columnas, no solo el descuento."""
+        for label in ("Cantidad:", "(Cantidad)", "Descripción:", "Descripciones"):
+            with self.subTest(label=label):
+                header = [
+                    _w(88.0, label), _w(250.0, "Precio"), _w(330.0, "Descuento"),
+                    _w(390.0, "Recargo"), _w(425.8, "IVA"), _w(458.1, "%"),
+                ]
+                col = _detect_column_x([header])
+                self.assertEqual(col["precio"], 250.0)
+                self.assertEqual(col["descuento"], 330.0)
+
+    def test_una_linea_previa_que_parece_datos_no_anula_el_encabezado(self):
+        lines = [
+            [_w(35.0, "1"), _w(50.0, "de"), _w(60.0, "2")],  # paginación
+            _header(),
+            [_w(39.3, "1"), _w(203.0, "1,00"), _w(255.0, "1.500,00"), _w(340.0, "150,00")],
+        ]
+        col = _detect_column_x(lines)
+        self.assertEqual(col["precio"], 250.0, "la paginación no debe cortar el escaneo")
+        self.assertEqual(col["descuento"], 330.0)
 
     def test_sin_columna_detectada_a_la_derecha_no_se_adivina_el_ancho(self):
         """Adivinar el ancho es como el total del ítem terminaba en el campo."""
