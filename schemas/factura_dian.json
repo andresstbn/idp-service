@@ -121,6 +121,10 @@
           "inc_percentage": {
             "type": "string",
             "description": "Porcentaje de INC. Ej: '8.00'. Cadena vacía si no aplica."
+          },
+          "discount_amount": {
+            "type": ["string", "null"],
+            "description": "Monto del descuento comercial de la línea, en pesos, tal como aparece impreso (columna 'Descuento' / 'Dto.'). Ej: '100840.34'. Cadena vacía, '0' o null si la línea no tiene descuento."
           }
         }
       }
