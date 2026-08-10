@@ -134,6 +134,22 @@ class TestItemDiscount(unittest.TestCase):
                 self.assertEqual(col["precio"], 250.0)
                 self.assertEqual(col["descuento"], 330.0)
 
+    def test_una_fila_de_resumen_no_define_la_columna_de_descuento(self):
+        """Sin columna de descuento, un "Descuento total" del resumen inventaba uno."""
+        lines = [
+            [_w(35.0, "Nro"), _w(88.0, "Descripción"), _w(200.0, "Cantidad"),
+             _w(250.0, "Precio"), _w(425.8, "IVA"), _w(458.1, "%")],
+            [_w(39.3, "1"), _w(58.9, "TORNILLOS"), _w(203.0, "1,00"),
+             _w(255.0, "1.500,00"), _w(453.7, "19.00"), _w(490.0, "285,00")],
+            [_w(200.0, "Cantidad"), _w(240.0, "total:"), _w(260.0, "1"),
+             _w(400.0, "Descuento"), _w(440.0, "total:"), _w(470.0, "0,00")],
+        ]
+        col = _detect_column_x(lines)
+        self.assertIsNone(col["descuento"], "el resumen no define columnas")
+
+        item = _parse_item_row(lines[1], col)
+        self.assertEqual(item["discount_amount"], "")
+
     def test_una_linea_previa_que_parece_datos_no_anula_el_encabezado(self):
         lines = [
             [_w(35.0, "1"), _w(50.0, "de"), _w(60.0, "2")],  # paginación

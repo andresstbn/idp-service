@@ -403,6 +403,7 @@ def _detect_column_x(items_lines: list[Line]) -> dict[str, float | None]:
             continue
         if not any(_is_header_token(_norm_token(w[4])) for w in line):
             continue
+        assigned = (len(col), len(pct_xs))
         for word in line:
             t, x = _norm_token(word[4]), word[0]
             if t == "u/m" and "um" not in col:
@@ -422,6 +423,11 @@ def _detect_column_x(items_lines: list[Line]) -> dict[str, float | None]:
                 col["inc"] = x
             elif t == "%":
                 pct_xs.append(x)
+        # Una fila de resumen ("Cantidad total: 1 ... Descuento total: 0,00") también
+        # pasa el gate, y en una factura sin columna de descuento inventaba uno. La
+        # primera línea que asigna columnas es la de títulos: ahí se corta.
+        if (len(col), len(pct_xs)) != assigned:
+            break
 
     # Asignar posiciones de los porcentajes (primero IVA %, luego INC %)
     if pct_xs and iva_x is not None:
@@ -525,6 +531,9 @@ def _normalize_amount(text: str) -> str:
     distinguir el separador de miles del decimal — para una cantidad da igual,
     pero un descuento dividido por 1000 arruina el recálculo de IVA y total, y en
     Colombia el monto casi siempre se imprime sin centavos.
+
+    El precio en pesos manda sobre el caso raro: en una plantilla que usara el punto
+    como decimal, un valor con exactamente 3 decimales ("0.750") se lee como miles.
     """
     cleaned = re.sub(r"[^\d,.]", "", text)
     if re.fullmatch(r"\d{1,3}(?:\.\d{3})+", cleaned):
