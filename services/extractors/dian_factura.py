@@ -47,11 +47,21 @@ _ITEMS_START = "detalles de productos"
 _ITEMS_ENDS = {"notas finales", "referencias", "datos totales"}
 
 # Encabezados de la columna de descuento comercial por línea (ya sin el punto final).
-_DISCOUNT_HEADERS = {"descuento", "descuentos", "desc", "dto", "dcto", "descto"}
+# "desc" queda fuera a propósito: es la abreviatura habitual de Descripción, y como
+# encabezado del descuento haría que el código del producto se leyera como monto.
+_DISCOUNT_HEADERS = {"descuento", "descuentos", "dto", "dcto"}
 
-# Forma de un monto impreso: "1.500", "100.840,34", "10185.1900", "$0". Rechaza
-# fechas ("2025-02-28") y códigos, que por sola coordenada se colarían al campo.
-_AMOUNT_RE = re.compile(r"^\$?\d{1,3}(?:\.\d{3})+(?:,\d{1,4})?$|^\$?\d+(?:[.,]\d{1,4})?$")
+# Tokens de encabezado que identifican la fila de títulos de la tabla. Se comparan
+# como palabra completa: "nro" como subcadena aparecía dentro de descripciones
+# ("ENROLLADO") y dejaba que una fila de datos definiera las columnas.
+_HEADER_TOKENS = {"u/m", "cantidad", "descripción", "descripcion", "nro"}
+
+# Forma de un monto impreso: "1.500", "100.840,34", "10185.1900", "$0", "10,185.19",
+# "-100.840,34", "(100.840,34)". Rechaza fechas ("2025-02-28") y códigos con letras,
+# que por sola coordenada se colarían al campo.
+_AMOUNT_RE = re.compile(
+    r"^\(?-?\$?\d{1,3}(?:[.,]\d{3})+(?:[.,]\d{1,4})?\)?$|^\(?-?\$?\d+(?:[.,]\d{1,4})?\)?$"
+)
 
 # ─── Etiquetas conocidas (para truncar valores al encontrar la siguiente) ─────
 
@@ -371,10 +381,11 @@ def _detect_column_x(items_lines: list[Line]) -> dict[str, float | None]:
     pct_xs: list[float] = []
     iva_x: float | None = None
 
-    # Escanear las primeras líneas buscando palabras de encabezado
-    for line in items_lines[:8]:
-        lt = _line_text(line)
-        if not any(k in lt.lower() for k in ("u/m", "cantidad", "descripci", "nro")):
+    # Escanear las primeras líneas buscando palabras de encabezado. El escaneo se
+    # corta donde empiezan los datos: una fila de datos no debe definir columnas.
+    for line in items_lines[: min(8, _find_data_start(items_lines))]:
+        tokens = {w[4].lower().rstrip(".") for w in line}
+        if not tokens & _HEADER_TOKENS:
             continue
         for word in line:
             t, x = word[4].lower().rstrip("."), word[0]
@@ -425,22 +436,29 @@ def _detect_column_x(items_lines: list[Line]) -> dict[str, float | None]:
 
 
 def _discount_window(col: dict[str, float]) -> tuple[float | None, float | None]:
-    """Ventana [desde, hasta) de la celda de descuento, o (None, None) si no hay columna.
+    """Ventana [desde, hasta) de la celda de descuento, o (None, None) si no la hay.
 
     Se calcula solo con columnas **realmente detectadas** (`col` no trae defaults):
     acotar con un default se pasaría de columna y leería el recargo o el total.
     El borde es el punto medio con la columna vecina porque los montos van
     alineados a la derecha, así que el x0 del valor cae a la izquierda del x0 de
     su encabezado tanto como el número sea más ancho que la etiqueta.
+
+    Se renuncia al descuento —antes que entregar uno equivocado— si falta con qué
+    acotarlo: sin la columna de precio detectada su ventana usa el default 335 y
+    puede solaparse (un mismo token saldría como precio y como descuento), y sin
+    columna detectada a la derecha habría que adivinar el ancho, que es como el
+    total del ítem terminaba en el campo.
     """
     x = col.get("descuento")
-    if x is None:
+    if x is None or "precio" not in col:
+        return None, None
+    right = [v for v in col.values() if v > x]
+    if not right:
         return None, None
     left = [v for v in col.values() if v < x]
-    right = [v for v in col.values() if v > x]
     start = (max(left) + x) / 2 if left else x - 20.0
-    end = (x + min(right)) / 2 if right else x + 45.0
-    return start, end
+    return start, (x + min(right)) / 2
 
 
 def _find_data_start(items_lines: list[Line]) -> int:
@@ -482,6 +500,20 @@ def _pick_percentage(line: Line, pct_x: float | None) -> str:
     return ""
 
 
+def _normalize_amount(text: str) -> str:
+    """Normaliza un monto impreso, tratando los grupos de miles sin decimales.
+
+    `_normalize_colombian_number` lee "100.840" como 100,84 porque no puede
+    distinguir el separador de miles del decimal — para una cantidad da igual,
+    pero un descuento dividido por 1000 arruina el recálculo de IVA y total, y en
+    Colombia el monto casi siempre se imprime sin centavos.
+    """
+    cleaned = re.sub(r"[^\d,.]", "", text)
+    if re.fullmatch(r"\d{1,3}(?:\.\d{3})+", cleaned):
+        return cleaned.replace(".", "")
+    return _normalize_colombian_number(text)
+
+
 def _pick_amount(line: Line, x_start: float, x_end: float) -> str:
     """Extrae el primer valor monetario dentro de la ventana [x_start, x_end).
 
@@ -491,7 +523,7 @@ def _pick_amount(line: Line, x_start: float, x_end: float) -> str:
     """
     for w in line:
         if x_start <= w[0] < x_end and _AMOUNT_RE.match(w[4]):
-            return _normalize_colombian_number(w[4])
+            return _normalize_amount(w[4])
     return ""
 
 
@@ -553,9 +585,16 @@ def _parse_item_row(
     inc_pct = _pick_percentage(line, inc_pct_x)
 
     # Descuento comercial de la línea, en pesos. "" si la factura no trae la columna.
+    # Sin precio leído no se emite: el consumidor lo expresa como porcentaje de
+    # price * quantity, así que un descuento suelto no le sirve, y esa es justo la
+    # señal de que la ventana del precio y la del descuento no quedaron alineadas
+    # con la plantilla (p. ej. una columna de precio muy ancha).
+    # ponytail: la asignación por punto medio del x0 basta para las plantillas DIAN
+    # conocidas; si aparece una que la rompa, el paso es asignar cada token a la
+    # columna más cercana por su centro (x0+x1)/2, que ya viene en Word.
     discount_amount = (
         _pick_amount(line, descuento_from, descuento_to)
-        if descuento_from is not None and descuento_to is not None
+        if descuento_from is not None and descuento_to is not None and price
         else ""
     )
 
