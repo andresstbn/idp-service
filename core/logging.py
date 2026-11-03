@@ -56,6 +56,7 @@ class JSONFormatter(logging.Formatter):
             )[:-3]
             + "Z",
             "level": record.levelname,
+            "severity": record.levelname,
             "message": record.getMessage(),
             "trace_id": _trace_id_ctx.get(),
             "project_id": _project_id_ctx.get(),
@@ -98,7 +99,9 @@ def log(
     logger: logging.Logger,
     level: int,
     message: str,
+    *,
+    exc_info: bool = False,
     **fields: Any,
 ) -> None:
     """Helper para loggear con campos estructurados adicionales."""
-    logger.log(level, message, extra={"extra_fields": fields})
+    logger.log(level, message, exc_info=exc_info, extra={"extra_fields": fields})
